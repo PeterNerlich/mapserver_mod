@@ -491,6 +491,7 @@ find_neighbor_blocks = function(pos, meta, name)
 			minetest.log("error", "[mapserver_mod][trainlines] Internal Error searching for nearby nodes: Invalid span "..i.." between "..minetest.pos_to_string(span[1]).." and "..minetest.pos_to_string(span[2]).." (volume of "..tostring(get_volume(span))..")")
 			return empty
 		end
+		minetest.load_area(span[1], span[2])
 		blocks[i] = minetest.find_nodes_in_area(span[1], span[2], "mapserver:train")
 	end
 	local prv = nil
