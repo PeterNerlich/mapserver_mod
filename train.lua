@@ -7,6 +7,7 @@ local find_neighbor_blocks -- defined later
 local update_neighbors --defined later
 local recalculate_line_to -- defined later
 local visualize_to_player -- defined later
+local timeout -- defined later
 local TRAVERSER_LIMIT = 1000
 local MARKER_TIMEOUT = 90 -- seconds
 
@@ -987,6 +988,8 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path, delete)
 	minetest.log("error", "changed:  "..pme(changed_markers))
 	minetest.log("error", "deleted:  "..pme(deleted_markers))
 	]]--
+
+	minetest.after(MARKER_TIMEOUT, timeout(name))
 end
 
 local constrain = function(x, range)
@@ -1096,24 +1099,25 @@ minetest.register_globalstep(function()
 	end
 end)
 
-local timeout = function(name)
-	if markers[name] ~= nil then
-		if markers[name].timestamp + MARKER_TIMEOUT <= os.time() then
-			for k,v in pairs(markers[name]) do
-				if k ~= "timestamp" and p ~= "borders" then
-					player:hud_remove(v.hud_id)
+timeout = function(name)
+	return function()
+		local player = minetest.get_player_by_name(name)
+		if markers[name] ~= nil then
+			if markers[name].timestamp + MARKER_TIMEOUT-1 <= os.time() then
+				for k,v in pairs(markers[name]) do
+					if k ~= "timestamp" and k ~= "borders" then
+						player:hud_remove(v.hud_id)
+					end
 				end
-			end
-			for k,v in pairs(markers[name].borders) do
-				if k ~= "center" then
-					player:hud_remove(v.hud_id)
+				for k,v in pairs(markers[name].borders) do
+					if k ~= "center" then
+						player:hud_remove(v.hud_id)
+					end
 				end
+				markers[name] = nil
 			end
-			markers[name] = nil
 		end
 	end
-
-	minetest.after(UPDATE_INTERVAL, update_loop)
 end
 
 minetest.register_on_leaveplayer(function(player)
