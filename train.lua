@@ -8,6 +8,7 @@ local update_neighbors --defined later
 local recalculate_line_to -- defined later
 local visualize_to_player -- defined later
 local TRAVERSER_LIMIT = 1000
+local MARKER_TIMEOUT = 90 -- seconds
 
 local update_formspec = function(meta)
 	local line = meta:get_string("line")
@@ -889,13 +890,15 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 	local deleted_markers = {}
 	-- clear vanished elements
 	for p,v in pairs(markers[name]) do
-		--if done[p] == nil then
-			player:hud_remove(v.hud_id)
-			--deleted_markers = deleted_markers + 1
-			table.insert(deleted_markers, {p, v.hud_id})
-		--end
-		--prev_markers = prev_markers + 1
-		table.insert(prev_markers, {p, v.hud_id})
+		if p ~= "timestamp" then
+			--if done[p] == nil then
+				player:hud_remove(v.hud_id)
+				--deleted_markers = deleted_markers + 1
+				table.insert(deleted_markers, {p, v.hud_id})
+			--end
+			--prev_markers = prev_markers + 1
+			table.insert(prev_markers, {p, v.hud_id})
+		end
 	end
 
 	--[[
@@ -903,6 +906,7 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 		print("old: "..p..": "..v.hud_id)
 	end
 	]]--
+	done.timestamp = os.time()
 	markers[name] = done
 	--[[
 	for p,v in pairs(markers[name]) do
@@ -924,3 +928,23 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 	minetest.log("error", "deleted:  "..pme(deleted_markers))
 	]]--
 end
+
+local timeout = function(name)
+	if markers[name] ~= nil then
+		if markers[name].timestamp + MARKER_TIMEOUT <= os.time() then
+			for k,v in pairs(markers[name]) do
+				if k ~= "timestamp" then
+					player:hud_remove(v.hud_id)
+				end
+			end
+			markers[name] = nil
+		end
+	end
+
+	minetest.after(UPDATE_INTERVAL, update_loop)
+end
+
+minetest.register_on_leaveplayer(function(player)
+	local player_name = player:get_player_name()
+	markers[name] = nil
+end)
