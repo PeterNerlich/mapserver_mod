@@ -419,6 +419,19 @@ local get_volume = function(span)
 	local diff = vector.subtract(span[2], span[1])
 	return (math.abs(diff.x)+1) * (math.abs(diff.y)+1) * (math.abs(diff.z)+1)
 end
+-- the offsets are chosen so that the resulting area is just under the maximum allowable size
+local search_areas = {
+	flat = function(pos)
+		return area_from_offset(pos,
+			vector.new(halve_area(flat_length), halve_area(flat_height), halve_area(flat_length)))
+	end,
+	upper_half = function(pos)
+		return span_rectangle(pos, halve_area(cuboid_length), cuboid_height-1, halve_area(flat_height)+1)
+	end,
+	lower_half = function(pos)
+		return span_rectangle(pos, halve_area(cuboid_length), cuboid_height-1, halve_area(flat_height)+1, true)
+	end
+}
 
 find_neighbor_blocks = function(pos, meta, name)
 	if meta == nil then
@@ -437,14 +450,9 @@ find_neighbor_blocks = function(pos, meta, name)
 		return empty
 	end
 
-	-- the offsets are chosen so that the resulting area is just under the maximum allowable size
-	local areas = {
-		flat = area_from_offset(pos, vector.new(halve_area(flat_length), halve_area(flat_height), halve_area(flat_length))),
-		upper_half = span_rectangle(pos, halve_area(cuboid_length), cuboid_height-1, halve_area(flat_height)+1),
-		lower_half = span_rectangle(pos, halve_area(cuboid_length), cuboid_height-1, halve_area(flat_height)+1, true)
-	}
 	local blocks = {}
-	for i,span in pairs(areas) do
+	for i,span in pairs(search_areas) do
+		span = span(pos)
 		if get_volume(span) > max_nodes then
 			minetest.chat_send_player(name, "Internal Error searching for nearby nodes: Invalid span "..i.." between "..minetest.pos_to_string(span[1]).." and "..minetest.pos_to_string(span[2]).." (volume of "..tostring(get_volume(span))..")")
 			minetest.log("error", "[mapserver_mod][trainlines] Internal Error searching for nearby nodes: Invalid span "..i.." between "..minetest.pos_to_string(span[1]).." and "..minetest.pos_to_string(span[2]).." (volume of "..tostring(get_volume(span))..")")
@@ -890,7 +898,7 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 	local deleted_markers = {}
 	-- clear vanished elements
 	for p,v in pairs(markers[name]) do
-		if p ~= "timestamp" then
+		if p ~= "timestamp" and p ~= "borders" then
 			--if done[p] == nil then
 				player:hud_remove(v.hud_id)
 				--deleted_markers = deleted_markers + 1
@@ -900,6 +908,9 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 			table.insert(prev_markers, {p, v.hud_id})
 		end
 	end
+
+	done.borders = markers[name].borders or {}
+	done.borders.center = pos
 
 	--[[
 	for p,v in pairs(markers[name]) do
@@ -929,11 +940,119 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 	]]--
 end
 
+local constrain = function(x, range)
+	local min = math.min(range[1], range[2])
+	local max = math.max(range[1], range[2])
+	return math.max(min, math.min(max, x))
+end
+
+local vconstrain = function(pos, area)
+	local changed = false
+	local tmp
+	for _,k in ipairs({"x","y","z"}) do
+		tmp = pos[k]
+		pos[k] = constrain(pos[k], map(area, function(a) return a[k] end))
+		changed = changed or tmp ~= pos[k]
+	end
+	return changed
+end
+
+local update_borders = function(player)
+	local name = player:get_player_name()
+	if not markers[name] then
+		return  -- Player has just joined/left
+	end
+	local pos = player:get_pos()
+	pos.y = pos.y + 1.5
+	local borders = markers[name].borders
+
+	-- determine positions
+	for _,k in ipairs({"x","y","z"}) do
+		for _,c in ipairs({"s","f"}) do
+			local area
+			if c == "f" then
+				area = search_areas.flat
+			else
+				if pos.y > borders.center.y then
+					area = search_areas.upper_half
+				else
+					area = search_areas.lower_half
+				end
+			end
+			area = area(borders.center)
+
+			local i = c..k
+			if borders[i] == nil then
+				borders[i] = {
+					text = string.upper(k).." ("..(c == "f" and "far" or "high")..")",
+					color = nil,
+					pos = nil
+				}
+			end
+
+			borders[i].pos = vector.new(pos)
+			local outside = vconstrain(borders[i].pos, area)
+			local extreme = function(x, a,b)
+				if math.abs(x-a) < math.abs(x-b) then
+					return a
+				else
+					return b
+				end
+			end
+			borders[i].pos[k] = extreme(borders[i].pos[k],
+				area[1][k], area[2][k])
+
+			if outside then
+				borders[i].color = RGB(1,0,.8)
+			else
+				local base = 0
+				local col = {
+					x = base,
+					y = base,
+					z = base
+				}
+				col[k] = 1
+				borders[i].color = RGB(col.x, col.y, col.z)
+			end
+		end
+	end
+
+	-- update
+	for k,v in pairs(markers[name].borders) do
+		if k ~= "center" then
+			if v.hud_id == nil then
+				v.hud_id = player:hud_add({
+					hud_elem_type = "waypoint",
+					name = v.text,
+					text = "",
+					number = v.color,
+					world_pos = v.pos
+				})
+			else
+				player:hud_change(v.hud_id, "name", v.text)
+				player:hud_change(v.hud_id, "number", v.color)
+				player:hud_change(v.hud_id, "world_pos", v.pos)
+			end
+		end
+	end
+end
+
+minetest.register_globalstep(function()
+	for _, player in pairs(minetest.get_connected_players()) do
+		update_borders(player)
+	end
+end)
+
 local timeout = function(name)
 	if markers[name] ~= nil then
 		if markers[name].timestamp + MARKER_TIMEOUT <= os.time() then
 			for k,v in pairs(markers[name]) do
-				if k ~= "timestamp" then
+				if k ~= "timestamp" and p ~= "borders" then
+					player:hud_remove(v.hud_id)
+				end
+			end
+			for k,v in pairs(markers[name].borders) do
+				if k ~= "center" then
 					player:hud_remove(v.hud_id)
 				end
 			end
