@@ -14,8 +14,8 @@ local update_formspec = function(meta)
 	local line = meta:get_string("line")
 	local station = meta:get_string("station")
 	local index = meta:get_string("index")
-	local color = meta:get_string("color") or ""
-	local rail_pos = meta:get_string("rail_pos") or ""
+	local color = meta:get_string("color")
+	local rail_pos = meta:get_string("rail_pos")
 
 	local rail_btns = ""
 	if advtrains_present then
@@ -53,6 +53,19 @@ local update_formspec = function(meta)
 
 end
 
+local clear_neighbor_cache = function(meta)
+	-- remove meta from self
+	meta:set_string("prv_pos", "")
+	meta:set_string("prv_index", "")
+	meta:set_string("prv_rail_pos", "")
+
+	meta:set_string("nxt_pos", "")
+	meta:set_string("nxt_index", "")
+	meta:set_string("nxt_rail_pos", "")
+
+	meta:set_string("linepath_from_prv", "")
+end
+
 
 minetest.register_node("mapserver:train", {
 	description = "Mapserver Train",
@@ -75,7 +88,9 @@ minetest.register_node("mapserver:train", {
 			if name ~= nil then
 				name = string.lower(name)
 				if last_set_by[name] ~= nil then
-					last_index = last_set_by[name].index + 5
+					if type(last_set_by[name].index) == "number" then
+						last_index = last_set_by[name].index + 5
+					end
 					last_line = last_set_by[name].line
 					last_color = last_set_by[name].color
 				else
@@ -99,12 +114,30 @@ minetest.register_node("mapserver:train", {
 		return mapserver.after_place_node(pos, placer, itemstack, pointed_thing)
 	end,
 
-	after_dig_node = function(pos, oldnode, oldmetadata, player)
-		local fake_meta = minetest.get_meta(pos)
+	on_dig = function(pos, node, player)
+		local meta = minetest.get_meta(pos)
 
-		-- TODO: why doesn't this work properly?
+		local line = meta:get_string("line")
+		local index = meta:get_string("index")
+		local color = meta:get_string("color")
 
-		update_neighbors(pos, fake_meta, player, true)
+		update_neighbors(pos, meta, player, true, true)
+
+		clear_neighbor_cache(meta)
+
+		last_set_by[name].line = last_line
+		if tonumber(last_index) ~= nil then
+			last_set_by[name].index = tonumber(last_index)
+		end
+		last_set_by[name].color = last_color
+
+		meta:set_string("station", "")
+		meta:set_string("line", "")
+		meta:set_string("index", "")
+		meta:set_string("color", "")
+		meta:set_string("rail_pos", "")
+
+		return minetest.node_dig(pos, node, player)
 	end,
 
 	on_punch = function(pos, node, puncher, pointed_thing)
@@ -115,6 +148,8 @@ minetest.register_node("mapserver:train", {
 		local meta = minetest.get_meta(pos)
 
 		update_neighbors(pos, meta, puncher, true)
+
+		return minetest.node_punch(pos, node, puncher, pointed_thing)
 	end,
 
 	on_receive_fields = function(pos, formname, fields, sender)
@@ -133,19 +168,18 @@ minetest.register_node("mapserver:train", {
 			end
 
 			local index = tonumber(fields.index)
-			if index ~= nil then
-				index = index
-			end
 
 			meta:set_string("color", fields.color)
 			meta:set_string("line", fields.line)
 			meta:set_string("station", fields.station)
-			meta:set_int("index", index)
+			meta:set_string("index", tostring(index))
 
 			last_set_by[lname].color = fields.color
 			last_set_by[lname].line = fields.line
 			last_set_by[lname].station = fields.station
-			last_set_by[lname].index = index
+			if index ~= nil then
+				last_set_by[lname].index = index
+			end
 
 			update_neighbors(pos, meta, sender, true)
 
@@ -206,9 +240,9 @@ if mapserver.enable_crafting then
 	})
 end
 
-
-update_neighbors = function(pos, meta, player, update_markers)
+update_neighbors = function(pos, meta, player, update_markers, delete)
 	update_markers = update_markers and true or false
+	delete = delete and true or false
 	if meta == nil then
 		meta = minetest.get_meta(pos)
 	end
@@ -224,8 +258,9 @@ update_neighbors = function(pos, meta, player, update_markers)
 	local prv_meta = prv ~= nil and minetest.get_meta(prv) or nil
 	local nxt_meta = nxt ~= nil and minetest.get_meta(nxt) or nil
 
-	if prv ~= nil and prv_meta:get_string("line") ~= line and
-		nxt ~= nil and nxt_meta:get_string("line") ~= line then
+	if (prv ~= nil and prv_meta:get_string("line") ~= line) or
+		(nxt ~= nil and nxt_meta:get_string("line") ~= line) or
+		delete then
 		if prv ~= nil and nxt == nil then
 			-- loose end
 			prv_meta:set_string("nxt_pos", "")
@@ -238,11 +273,11 @@ update_neighbors = function(pos, meta, player, update_markers)
 			nxt_meta:set_string("prv_rail_pos", "")
 
 			nxt_meta:set_string("linepath_from_prv", "")
-		else
+		elseif prv ~= nil and nxt ~= nil then
 			-- we were in the middle
 			prv_meta:set_string("nxt_pos", nxt)
-			prv_meta:set_string("nxt_index", meta:get_string("nxt_index"))
-			prv_meta:set_string("nxt_rail_pos", meta:get_string("nxt_rail_pos"))
+			prv_meta:set_string("nxt_index", nxt_meta:get_string("index"))
+			prv_meta:set_string("nxt_rail_pos", nxt_meta:get_string("rail_pos"))
 
 			nxt_meta:set_string("prv_pos", prv)
 			nxt_meta:set_string("prv_index", meta:get_string("prv_index"))
@@ -257,16 +292,9 @@ update_neighbors = function(pos, meta, player, update_markers)
 			end
 		end
 
-		-- remove meta from self
-		meta:set_string("prv_pos", "")
-		meta:set_string("prv_index", "")
-		meta:set_string("prv_rail_pos", "")
-
-		meta:set_string("nxt_pos", "")
-		meta:set_string("nxt_index", "")
-		meta:set_string("nxt_rail_pos", "")
-
-		meta:set_string("linepath_from_prv", "")
+		if not delete then
+			clear_neighbor_cache(meta)
+		end
 	end
 
 	-- update or add us
@@ -276,93 +304,95 @@ update_neighbors = function(pos, meta, player, update_markers)
 	nxt = neighbors[2]
 	prv_meta = prv ~= nil and minetest.get_meta(prv.pos) or nil
 	nxt_meta = nxt ~= nil and minetest.get_meta(nxt.pos) or nil
-	-- if index or rail pos changed, recalculate line path
-	if prv ~= nil then
-		local old_nxt_pos = prv_meta:get_string("nxt_pos")
-		local old_nxt_index = tonumber(prv_meta:get_string("nxt_index"))
-		local old_nxt_rail_pos = prv_meta:get_string("nxt_rail_pos")
+	if not delete then
+		-- if index or rail pos changed, recalculate line path
+		if prv ~= nil then
+			local old_nxt_pos = prv_meta:get_string("nxt_pos")
+			local old_nxt_index = tonumber(prv_meta:get_string("nxt_index"))
+			local old_nxt_rail_pos = prv_meta:get_string("nxt_rail_pos")
 
-		-- if old info on prev does not match us, set correct
-		if old_nxt_pos ~= (nxt == nil and "" or nxt.pos) then
-			if old_nxt_pos == pos then
-				-- phew, it's just us
-			elseif nxt ~= nil and old_nxt_pos == nxt.pos then
-				-- okay we are just freshly added
-				-- update the previous block
-				prv_meta:set_string("nxt_pos", minetest.pos_to_string(pos))
-			else
-				-- there are more nodes we don't know about!
-			end
-		end
-		if old_nxt_index ~= index then
-			-- index changed! since our position is still unchanged
-			-- (otherwise removing/re-adding above would have happened instead)
-			-- we just need to update the info, without linepath recalculation
-			prv_meta:set_int("nxt_index", index)
-		end
-		if old_nxt_rail_pos ~= rail_pos then
-			-- rail pos changed! definitely need linepath recalculation
-			prv_meta:set_string("nxt_rail_pos", rail_pos)
-			meta:set_string("linepath_from_prv", "")
-		end
-
-		meta:set_string("prv_pos", minetest.pos_to_string(prv.pos))
-		meta:set_int("prv_index", prv.index)
-		meta:set_string("prv_rail_pos", prv.rail_pos)
-	end
-	if nxt ~= nil then
-		local old_prv_pos = nxt_meta:get_string("prv_pos")
-		local old_prv_index = tonumber(nxt_meta:get_string("prv_index"))
-		local old_prv_rail_pos = nxt_meta:get_string("prv_rail_pos")
-
-		-- if old info on next does not match us, set correct
-		if old_prv_pos ~= (prv == nil and "" or prv.pos) then
-			if old_prv_pos == pos then
-				-- phew, it's just us
-			elseif prv ~= nil and old_prv_pos == prv.pos then
-				-- okay we are just freshly added
-				-- update the previous block
-				nxt_meta:set_string("prv_pos", minetest.pos_to_string(pos))
-				nxt_meta:set_string("linepath_from_prv", "")
-			else
-				-- there are more nodes we don't know about!
-			end
-		end
-		if old_prv_index ~= index then
-			-- index changed! since our position is still unchanged
-			-- (otherwise removing/re-adding above would have happened instead)
-			-- we just need to update the info, without linepath recalculation
-			nxt_meta:set_int("prv_index", index)
-		end
-		if old_prv_rail_pos ~= rail_pos then
-			-- rail pos changed! definitely need linepath recalculation
-			nxt_meta:set_string("prv_rail_pos", rail_pos)
-			nxt_meta:set_string("linepath_from_prv", "")
-		end
-
-		meta:set_string("nxt_pos", minetest.pos_to_string(nxt.pos))
-		meta:set_int("nxt_index", nxt.index)
-		meta:set_string("nxt_rail_pos", nxt.rail_pos)
-	end
-
-	if rail_pos ~= "" then
-		if prv ~= nil and prv.rail_pos ~= "" then
-			local line = recalculate_line_to(prv.pos, pos, prv_meta, meta)
-			if name then
-				if #line > 0 then
-					minetest.chat_send_player(name, "Found line from prv ("..tonumber(#line).."): "..table.concat(line, "->"))
+			-- if old info on prev does not match us, set correct
+			if old_nxt_pos ~= (nxt == nil and "" or nxt.pos) then
+				if old_nxt_pos == pos then
+					-- phew, it's just us
+				elseif nxt ~= nil and old_nxt_pos == nxt.pos then
+					-- okay we are just freshly added
+					-- update the previous block
+					prv_meta:set_string("nxt_pos", minetest.pos_to_string(pos))
 				else
-					minetest.chat_send_player(name, "Did not find line from prv.")
+					-- there are more nodes we don't know about!
 				end
 			end
+			if old_nxt_index ~= index then
+				-- index changed! since our position is still unchanged
+				-- (otherwise removing/re-adding above would have happened instead)
+				-- we just need to update the info, without linepath recalculation
+				prv_meta:set_int("nxt_index", index)
+			end
+			if old_nxt_rail_pos ~= rail_pos then
+				-- rail pos changed! definitely need linepath recalculation
+				prv_meta:set_string("nxt_rail_pos", rail_pos)
+				meta:set_string("linepath_from_prv", "")
+			end
+
+			meta:set_string("prv_pos", minetest.pos_to_string(prv.pos))
+			meta:set_int("prv_index", prv.index)
+			meta:set_string("prv_rail_pos", prv.rail_pos)
 		end
-		if nxt ~= nil and nxt.rail_pos ~= "" then
-			local line = recalculate_line_to(pos, nxt.pos, meta, nxt_meta)
-			if name then
-				if #line > 0 then
-					minetest.chat_send_player(name, "Found line to nxt ("..tonumber(#line).."): "..table.concat(line, "->"))
+		if nxt ~= nil then
+			local old_prv_pos = nxt_meta:get_string("prv_pos")
+			local old_prv_index = tonumber(nxt_meta:get_string("prv_index"))
+			local old_prv_rail_pos = nxt_meta:get_string("prv_rail_pos")
+
+			-- if old info on next does not match us, set correct
+			if old_prv_pos ~= (prv == nil and "" or prv.pos) then
+				if old_prv_pos == pos then
+					-- phew, it's just us
+				elseif prv ~= nil and old_prv_pos == prv.pos then
+					-- okay we are just freshly added
+					-- update the previous block
+					nxt_meta:set_string("prv_pos", minetest.pos_to_string(pos))
+					nxt_meta:set_string("linepath_from_prv", "")
 				else
-					minetest.chat_send_player(name, "Did not find line to nxt.")
+					-- there are more nodes we don't know about!
+				end
+			end
+			if old_prv_index ~= index then
+				-- index changed! since our position is still unchanged
+				-- (otherwise removing/re-adding above would have happened instead)
+				-- we just need to update the info, without linepath recalculation
+				nxt_meta:set_int("prv_index", index)
+			end
+			if old_prv_rail_pos ~= rail_pos then
+				-- rail pos changed! definitely need linepath recalculation
+				nxt_meta:set_string("prv_rail_pos", rail_pos)
+				nxt_meta:set_string("linepath_from_prv", "")
+			end
+
+			meta:set_string("nxt_pos", minetest.pos_to_string(nxt.pos))
+			meta:set_int("nxt_index", nxt.index)
+			meta:set_string("nxt_rail_pos", nxt.rail_pos)
+		end
+
+		if rail_pos ~= "" then
+			if prv ~= nil and prv.rail_pos ~= "" then
+				local line = recalculate_line_to(prv.pos, pos, prv_meta, meta)
+				if name then
+					if #line > 0 then
+						minetest.chat_send_player(name, "Found line from prv ("..tonumber(#line).."): "..table.concat(line, "->"))
+					else
+						minetest.chat_send_player(name, "Did not find line from prv.")
+					end
+				end
+			end
+			if nxt ~= nil and nxt.rail_pos ~= "" then
+				local line = recalculate_line_to(pos, nxt.pos, meta, nxt_meta)
+				if name then
+					if #line > 0 then
+						minetest.chat_send_player(name, "Found line to nxt ("..tonumber(#line).."): "..table.concat(line, "->"))
+					else
+						minetest.chat_send_player(name, "Did not find line to nxt.")
+					end
 				end
 			end
 		end
@@ -377,7 +407,9 @@ update_neighbors = function(pos, meta, player, update_markers)
 
 	if update_markers and
 		player and minetest.is_player(player) then
-		visualize_to_player(pos, meta, neighbors, player, true)
+		if delete then
+		end
+		visualize_to_player(pos, meta, neighbors, player, true, delete)
 	end
 end
 
@@ -737,7 +769,8 @@ local colormethis = function(v, extremes, halfway_point, neighbors)
 	else
 		--b = b + it2 * (1-base)
 		b = 1
-		g = interpolate(g, 1, .4)
+		g = interpolate(g, 1, .2)
+		r = interpolate(g, 0, .2)
 		t = it2
 	end
 
@@ -771,7 +804,9 @@ local displayindex = function(v, line)
 	return out
 end
 
-visualize_to_player = function(pos, meta, neighbors, player, show_path)
+visualize_to_player = function(pos, meta, neighbors, player, show_path, delete)
+	show_path = show_path and true or false
+	delete = delete and true or false
 	local name = player:get_player_name()
 	local index = tonumber(meta:get_string("index"))
 	local line = meta:get_string("line")
@@ -791,73 +826,85 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 	local done = {}
 	local last_idx = nil
 	for i,v in ipairs(found_blocks) do
-		v.path = v.meta:get_string("linepath_from_prv")
-		v.has_rail = v.rail_pos ~= ""
-		v.has_path = v.path ~= ""
-		v.duplicate_index = v.index ~= nil and v.index == last_idx
-		if v.duplicate_index then
-			found_blocks[i-1].duplicate_index = true
+		if not delete or not vector.equals(vector.round(v.pos), vector.round(pos)) then
+			v.is_prv = neighbors[1] and vector.equals(v.pos, neighbors[1].pos)
+			v.is_nxt = neighbors[2] and vector.equals(v.pos, neighbors[2].pos)
+			v.path = v.meta:get_string("linepath_from_prv")
+			v.has_rail = v.rail_pos ~= ""
+			v.has_path = v.path ~= ""
+			v.duplicate_index = v.index ~= nil and v.index == last_idx
+			if v.duplicate_index then
+				found_blocks[i-1].duplicate_index = true
+			end
+			last_idx = v.index
 		end
-		last_idx = v.index
 
 		v.meta = nil
 	end
 	for i,v in ipairs(found_blocks) do
-		local pos_string = minetest.pos_to_string(v.pos)
-		done[pos_string] = v
-		if true then
-		--if markers[name][pos_string] == nil then
-			v.hud_id = player:hud_add({
-				hud_elem_type = "waypoint",
-				name = displayindex(v, line),
-				text = "",
-				number = colormethis(v, idx_extremes, index, neighbors),
-				world_pos = v.pos
-			})
+		if not delete or not vector.equals(vector.round(v.pos), vector.round(pos)) then
+			local pos_string = minetest.pos_to_string(v.pos)
+			done[pos_string] = v
+			if true then
+			--if markers[name][pos_string] == nil then
+				v.hud_id = player:hud_add({
+					hud_elem_type = "waypoint",
+					name = displayindex(v, line),
+					text = "",
+					number = colormethis(v, idx_extremes, index, neighbors),
+					world_pos = v.pos,
+					z_index = (v.is_prv or v.is_nxt) and -80 or -290
+				})
 
-			--added_markers = added_markers + 1
-			table.insert(added_markers, {pos_string, v.hud_id})
-		else
-			v.hud_id = markers[name][pos_string].hud_id
-			player:hud_change(v.hud_id, "name", displayindex(v, line))
-			player:hud_change(v.hud_id, "number", colormethis(v, idx_extremes, index, neighbors))
+				--added_markers = added_markers + 1
+				table.insert(added_markers, {pos_string, v.hud_id})
+			else
+				v.hud_id = markers[name][pos_string].hud_id
+				player:hud_change(v.hud_id, "name", displayindex(v, line))
+				player:hud_change(v.hud_id, "number", colormethis(v, idx_extremes, index, neighbors))
+				player:hud_change(v.hud_id, "z_index", (v.is_prv or v.is_nxt) and -80 or -290)
 
-			--changed_markers = changed_markers + 1
-			table.insert(changed_markers, {pos_string, v.hud_id})
+				--changed_markers = changed_markers + 1
+				table.insert(changed_markers, {pos_string, v.hud_id})
+			end
+			--new_markers = new_markers + 1
+			table.insert(new_markers, {pos_string, v.hud_id})
 		end
-		--new_markers = new_markers + 1
-		table.insert(new_markers, {pos_string, v.hud_id})
 	end
 
 	if show_path then
-		local pos_string = minetest.pos_to_string(pos)
-		if done[pos_string].has_path then
-			local path = split(done[pos_string].path, ";")
-			for _,p in ipairs(path) do
-				done[p] = {pos = minetest.string_to_pos(p)}
-				done[p].pos.y = done[p].pos.y - .4
-				if true then
-				--if markers[name][p] == nil then
-					done[p].hud_id = player:hud_add({
-						hud_elem_type = "waypoint",
-						name = "", --"(pPath) | "..tostring(c_this_path),
-						text = "",
-						number = c_this_path,
-						world_pos = done[p].pos
-					})
+		if not delete then
+			local pos_string = minetest.pos_to_string(pos)
+			if done[pos_string].has_path then
+				local path = split(done[pos_string].path, ";")
+				for _,p in ipairs(path) do
+					done[p] = {pos = minetest.string_to_pos(p)}
+					done[p].pos.y = done[p].pos.y - .4
+					if true then
+					--if markers[name][p] == nil then
+						done[p].hud_id = player:hud_add({
+							hud_elem_type = "waypoint",
+							name = "",
+							text = "",
+							number = c_this_path,
+							world_pos = done[p].pos,
+							z_index = -81
+						})
 
-					--added_markers = added_markers + 1
-					table.insert(added_markers, {p, done[p].hud_id})
-				else
-					done[p].hud_id = markers[name][pos_string].hud_id
-					player:hud_change(done[p].hud_id, "name", "") --"(pPath) | "..tostring(c_this_path))
-					player:hud_change(done[p].hud_id, "number", c_this_path)
+						--added_markers = added_markers + 1
+						table.insert(added_markers, {p, done[p].hud_id})
+					else
+						done[p].hud_id = markers[name][pos_string].hud_id
+						player:hud_change(done[p].hud_id, "name", "")
+						player:hud_change(done[p].hud_id, "number", c_this_path)
+						player:hud_change(done[p].hud_id, "z_index", -81)
 
-					--changed_markers = changed_markers + 1
-					table.insert(changed_markers, {p, done[p].hud_id})
+						--changed_markers = changed_markers + 1
+						table.insert(changed_markers, {p, done[p].hud_id})
+					end
+					--new_markers = new_markers + 1
+					table.insert(new_markers, {p, done[p].hud_id})
 				end
-				--new_markers = new_markers + 1
-				table.insert(new_markers, {p, done[p].hud_id})
 			end
 		end
 
@@ -871,18 +918,20 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path)
 					--if markers[name][p] == nil then
 						done[p].hud_id = player:hud_add({
 							hud_elem_type = "waypoint",
-							name = "", --"(nPath) | "..tostring(c_next_path),
+							name = "",
 							text = "",
 							number = c_next_path,
-							world_pos = done[p].pos
+							world_pos = done[p].pos,
+							z_index = -82
 						})
 
 						--added_markers = added_markers + 1
 						table.insert(added_markers, {p, done[p].hud_id})
 					else
 						done[p].hud_id = markers[name][pos_string].hud_id
-						player:hud_change(done[p].hud_id, "name", "") --"(nPath) | "..tostring(c_next_path))
+						player:hud_change(done[p].hud_id, "name", "")
 						player:hud_change(done[p].hud_id, "number", c_next_path)
+						player:hud_change(done[p].hud_id, "z_index", -82)
 
 						--changed_markers = changed_markers + 1
 						table.insert(changed_markers, {p, done[p].hud_id})
@@ -963,7 +1012,6 @@ local update_borders = function(player)
 		return  -- Player has just joined/left
 	end
 	local pos = player:get_pos()
-	pos.y = pos.y + 1.5
 	local borders = markers[name].borders
 
 	-- determine positions
@@ -991,7 +1039,7 @@ local update_borders = function(player)
 			end
 
 			borders[i].pos = vector.new(pos)
-			local outside = vconstrain(borders[i].pos, area)
+			borders[i].outside = vconstrain(borders[i].pos, area)
 			local extreme = function(x, a,b)
 				if math.abs(x-a) < math.abs(x-b) then
 					return a
@@ -1002,10 +1050,13 @@ local update_borders = function(player)
 			borders[i].pos[k] = extreme(borders[i].pos[k],
 				area[1][k], area[2][k])
 
-			if outside then
-				borders[i].color = RGB(1,0,.8)
+			-- adjust to player eye line
+			pos.y = pos.y + 1.5
+
+			if borders[i].outside then
+				borders[i].color = RGB(.8,.3,.6)
 			else
-				local base = 0
+				local base = .5
 				local col = {
 					x = base,
 					y = base,
@@ -1026,12 +1077,14 @@ local update_borders = function(player)
 					name = v.text,
 					text = "",
 					number = v.color,
-					world_pos = v.pos
+					world_pos = v.pos,
+					z_index = v.outside and -84 or -83
 				})
 			else
 				player:hud_change(v.hud_id, "name", v.text)
 				player:hud_change(v.hud_id, "number", v.color)
 				player:hud_change(v.hud_id, "world_pos", v.pos)
+				player:hud_change(v.hud_id, "z_index", v.outside and -84 or -83)
 			end
 		end
 	end
