@@ -126,11 +126,14 @@ minetest.register_node("mapserver:train", {
 
 		clear_neighbor_cache(meta)
 
-		last_set_by[name].line = last_line
-		if tonumber(last_index) ~= nil then
-			last_set_by[name].index = tonumber(last_index)
+		if last_set_by[name] == nil then
+			last_set_by[name] = {}
 		end
-		last_set_by[name].color = last_color
+		last_set_by[name].line = line
+		if tonumber(index) ~= nil then
+			last_set_by[name].index = tonumber(index)
+		end
+		last_set_by[name].color = color
 
 		meta:set_string("station", "")
 		meta:set_string("line", "")
