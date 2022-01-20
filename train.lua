@@ -774,7 +774,7 @@ local colormethis = function(v, extremes, halfway_point, neighbors)
 	else
 		--b = b + it2 * (1-base)
 		b = 1
-		g = interpolate(g, 1, .2)
+		--g = interpolate(g, 1, .2)
 		r = interpolate(g, 0, .2)
 		t = it2
 	end
@@ -1126,5 +1126,8 @@ end
 
 minetest.register_on_leaveplayer(function(player)
 	local player_name = player:get_player_name()
-	markers[name] = nil
+	if markers[name] ~= nil then
+		markers.timestamp = os.time()-1
+	end
+	timeout(name)
 end)
