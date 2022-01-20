@@ -9,7 +9,7 @@ local recalculate_line_to -- defined later
 local visualize_to_player -- defined later
 local timeout -- defined later
 local TRAVERSER_LIMIT = 1000
-local MARKER_TIMEOUT = 90 -- seconds
+local MARKER_TIMEOUT = 120 -- seconds
 
 local update_formspec = function(meta)
 	local line = meta:get_string("line")
@@ -421,6 +421,32 @@ local nroot = function(root, num)
 	return num^(1/root)
 end
 
+local ifilter = function(tbl, fn)
+	local out = {}
+	for i,v in ipairs(tbl) do
+		if fn(v, i, tbl) then
+			table.insert(out)
+		end
+	end
+	return out
+end
+local filter = function(tbl, fn)
+	local out = {}
+	for k,v in pairs(tbl) do
+		if fn(v, k, tbl) then
+			out[k] = v
+		end
+	end
+	return out
+end
+local map = function(tbl, fn)
+	local out = {}
+	for k,v in pairs(tbl) do
+		out[k] = fn(v, k, tbl)
+	end
+	return out
+end
+
 -- Searching an area for nodes is expensive.
 -- Minetest limits the amount to 4,096,000 nodes.
 -- Because there is not a good way to form one cuboid to fit all major long-distance usecases
@@ -466,6 +492,37 @@ local search_areas = {
 	end,
 	lower_half = function(pos)
 		return span_rectangle(pos, halve_area(cuboid_length), cuboid_height-1, halve_area(flat_height)+1, true)
+	end
+}
+
+local merge_areas = function(areas)
+	local out = { min = nil, max = nil }
+	for a,v in ipairs(areas) do
+		for _,i in ipairs({1, 2}) do
+			for _,m in ipairs({"min", "max"}) do
+				if out[m] == nil then
+					out[m] = vector.new(v[i])
+				else
+					for _,d in ipairs({"x", "y", "z"}) do
+						out[m][d] = math[m](out[m][d], v[i][d])
+					end
+				end
+			end
+		end
+	end
+	return {out.min, out.max}
+end
+local zero = vector.new(0,0,0)
+local _combined_areas = {
+	high = merge_areas({search_areas.upper_half(zero), search_areas.lower_half(zero)}),
+	all = merge_areas({search_areas.upper_half(zero), search_areas.lower_half(zero), search_areas.flat(zero)})
+}
+local combined_areas = {
+	high = function(pos)
+		return map(_combined_areas.high, function(p) return vector.add(p, pos) end)
+	end,
+	all = function(pos)
+		return map(_combined_areas.all, function(p) return vector.add(p, pos) end)
 	end
 }
 
@@ -661,32 +718,6 @@ end
 -- add markers for path found?
 -- remove markers after minute
 
-local ifilter = function(tbl, fn)
-	local out = {}
-	for i,v in ipairs(tbl) do
-		if fn(v, i, tbl) then
-			table.insert(out)
-		end
-	end
-	return out
-end
-local filter = function(tbl, fn)
-	local out = {}
-	for k,v in pairs(tbl) do
-		if fn(v, k, tbl) then
-			out[k] = v
-		end
-	end
-	return out
-end
-local map = function(tbl, fn)
-	local out = {}
-	for k,v in pairs(tbl) do
-		out[k] = fn(v, k, tbl)
-	end
-	return out
-end
-
 local find_all = function(str, sub)
 	local found = 0
 	local positions = {}
@@ -710,8 +741,18 @@ local split = function(str, sep)
 	return out
 end
 
-local interpolate = function(a, b, t)
-	return t*(b-a) + a
+local clamp = function(x, a, b)
+	local max = math.max(a, b)
+	local min = math.min(a, b)
+	return math.max(min, math.min(max, x))
+end
+
+local interpolate = function(a, b, t, clamp_down)
+	local out = t*(b-a) + a
+	if clamp_down then
+		out = clamp(out, a, b)
+	end
+	return out
 end
 
 local RGB = function(r, g, b)
@@ -719,9 +760,9 @@ local RGB = function(r, g, b)
 	local base = 0xFF
 
 	-- clamp values, discard fractions
-	r = math.floor(base * math.max(0, math.min(1, r)))
-	g = math.floor(base * math.max(0, math.min(1, g)))
-	b = math.floor(base * math.max(0, math.min(1, b)))
+	r = math.floor(base * clamp(r, 0, 1))
+	g = math.floor(base * clamp(g, 0, 1))
+	b = math.floor(base * clamp(b, 0, 1))
 
 	return r*2^16 + g*2^8 + b
 end
@@ -752,7 +793,7 @@ local colormethis = function(v, extremes, halfway_point, neighbors)
 	end
 	local t
 	if b - a == 0 then
-		t = 1
+		t = v.index < halfway_point and 1 or 0
 	else
 		t = (v.index - a) / (b - a)
 	end
@@ -965,6 +1006,11 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path, delete)
 
 	done.borders = markers[name].borders or {}
 	done.borders.center = pos
+	done.borders.areas = {
+		flat = search_areas.flat(pos),
+		high = combined_areas.high(pos),
+		all = combined_areas.high(pos)
+	}
 
 	--[[
 	for p,v in pairs(markers[name]) do
@@ -997,9 +1043,7 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path, delete)
 end
 
 local constrain = function(x, range)
-	local min = math.min(range[1], range[2])
-	local max = math.max(range[1], range[2])
-	return math.max(min, math.min(max, x))
+	return clamp(x, range[1], range[2])
 end
 
 local vconstrain = function(pos, area)
@@ -1022,26 +1066,23 @@ local update_borders = function(player)
 	local borders = markers[name].borders
 
 	-- determine positions
-	for _,k in ipairs({"x","y","z"}) do
-		for _,c in ipairs({"s","f"}) do
-			local area
-			if c == "f" then
-				area = search_areas.flat
-			else
-				if pos.y > borders.center.y then
-					area = search_areas.upper_half
-				else
-					area = search_areas.lower_half
-				end
-			end
-			area = area(borders.center)
+	for _,c in ipairs({"s","f"}) do
+		local area
+		if c == "f" then
+			area = borders.areas.flat
+		else
+			area = borders.areas.high
+		end
 
+		for _,k in ipairs({"x","y","z"}) do
 			local i = c..k
 			if borders[i] == nil then
 				borders[i] = {
 					text = string.upper(k).." ("..(c == "f" and "far" or "high")..")",
 					color = nil,
-					pos = nil
+					outside = false,
+					pos = nil,
+					offset = { x = 0, y = 0 }
 				}
 			end
 
@@ -1058,7 +1099,7 @@ local update_borders = function(player)
 				area[1][k], area[2][k])
 
 			-- adjust to player eye line
-			pos.y = pos.y + 1.5
+			borders[i].pos.y = borders[i].pos.y + 1.4
 
 			if borders[i].outside then
 				borders[i].color = RGB(.8,.3,.6)
@@ -1072,12 +1113,24 @@ local update_borders = function(player)
 				col[k] = 1
 				borders[i].color = RGB(col.x, col.y, col.z)
 			end
+
+			borders[i].offset.y = 0
+			if c == "f" then
+				if not vconstrain(pos, borders.areas.all) then
+					borders[i].offset.y = interpolate(0, -12, (1.4*math.abs(pos[k] - borders[i].pos[k])/math.abs(borders.center[k] - borders[i].pos[k]))^4, true)
+				end
+			else
+				if not borders[i].outside then
+					borders[i].offset.y = interpolate(0, 12, math.abs(pos[k] - borders[i].pos[k])/math.abs(borders.center[k] - borders[i].pos[k]), true)
+				end
+			end
+			borders[i].pos.y = borders[i].pos.y + borders[i].offset.y
 		end
 	end
 
 	-- update
 	for k,v in pairs(markers[name].borders) do
-		if k ~= "center" then
+		if k ~= "center" and k ~= "areas" then
 			if v.hud_id == nil then
 				v.hud_id = player:hud_add({
 					hud_elem_type = "waypoint",
@@ -1114,7 +1167,7 @@ timeout = function(name)
 					end
 				end
 				for k,v in pairs(markers[name].borders) do
-					if k ~= "center" then
+					if k ~= "center" and k ~= "areas" then
 						player:hud_remove(v.hud_id)
 					end
 				end
