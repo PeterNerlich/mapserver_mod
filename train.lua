@@ -657,6 +657,10 @@ recalculate_line_to = function(pos_a, pos_b, meta_a, meta_b)
 					min_item = v
 				end
 			end
+			if min_item == nil then
+				-- all items iver TRAVERSER_LIMIT
+				break
+			end
 
 			-- check the adjacent rail
 			local adj_pos, adj_connid, conn_idx, nextrail_y, next_conns = advtrains.get_adjacent_rail(min_item.pos, min_item.conns, min_item.connid, advtrains.all_tracktypes)
@@ -960,6 +964,7 @@ visualize_to_player = function(pos, meta, neighbors, player, show_path, delete)
 				local path = split(done[pos_string].path, ";")
 				for _,p in ipairs(path) do
 					done[p] = {pos = minetest.string_to_pos(p)}
+					done[p].pos.y = done[p].pos.y - .4
 					if true then
 					--if markers[name][p] == nil then
 						done[p].hud_id = player:hud_add({
